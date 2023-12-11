@@ -2,48 +2,63 @@
 
 package com.waffle.backgroundselector
 
+import android.content.Context
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 @Composable
 fun BackgroundSelector(onBackClicked: () -> Unit, onSearchClicked: () -> Unit) {
@@ -51,15 +66,40 @@ fun BackgroundSelector(onBackClicked: () -> Unit, onSearchClicked: () -> Unit) {
         Color.Red, Color.Green, Color.Blue, Color.Yellow,
         Color.Magenta, Color.Cyan, Color.Gray, Color.LightGray, Color.Black
     )
-    var selectedColor by remember { mutableStateOf(Color.White) }
+    val context = LocalContext.current
+    var selectedColor by remember { mutableStateOf<Uri?>(null) }
+    selectedColor = loadImageUri(context)
+    val imageUris = remember { mutableStateListOf<Uri>() }
+    imageUris.addAll(loadImageUris(context))
+    val launcher =
+        rememberLauncherForActivityResult(contract = ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+            uri?.let {
+                val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(it, takeFlags)
+                imageUris.add(it)
+                saveImageUris(context, imageUris)
+            }
+        }
 
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                title = { Text("Wallpaper Selector", fontWeight = FontWeight.Bold, color = Color.White) },
+                title = {
+                    Text(
+                        "Wallpaper Selector",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = { onBackClicked() }) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        Icon(
+                            Icons.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = Color.White
+                        )
                     }
                 },
                 actions = {
@@ -71,49 +111,84 @@ fun BackgroundSelector(onBackClicked: () -> Unit, onSearchClicked: () -> Unit) {
             )
         }
     ) { PaddingValues ->
-        Column (
-            modifier = Modifier.padding(paddingValues = PaddingValues)
-        ) {
-            TextMenu(text = "Select from Gallery")
-            TextMenu(text = "Set a Color")
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                contentPadding = PaddingValues(8.dp),
-                modifier = Modifier.padding(top = 8.dp)
+        Box() {
+            selectedColor?.let { getBitmapFromUri(it, context) }
+                ?.let { Image(bitmap = it, contentDescription = null, modifier = Modifier.fillMaxSize()) }
+            Column(
+                modifier = Modifier.padding(paddingValues = PaddingValues)
             ) {
-                items(colors) { color ->
-                    ColorItem(color, selectedColor) { selected ->
-                        selectedColor = selected
+                TextMenu(text = "Select from Gallery", onClickMenu = { launcher.launch(arrayOf("image/*")) })
+                TextMenu(text = "Set a Color", onClickMenu = { launcher.launch(arrayOf("image/*")) })
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    contentPadding = PaddingValues(8.dp),
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    items(imageUris) { uri ->
+                        ImageItem(image = uri, selectedImage = selectedColor, context = context){ selected ->
+                            selectedColor = selected
+                            saveImageUri(context, selected)
+                        }
                     }
                 }
             }
-
-            // Bottom area with text description for the selected color
-            Box(modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "You have selected the color: ${selectedColor.toHex()}",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
         }
+
     }
 }
 
+
 @Composable
-fun TextMenu(text: String) {
+fun TextMenu(text: String, onClickMenu: () -> Unit) {
     Row(
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp)
+        modifier = Modifier
+            .padding(start = 16.dp, end = 16.dp, top = 16.dp)
+            .clickable(onClick = { onClickMenu() })
     ) {
-        Icon(imageVector = Icons.Default.List, contentDescription = "Icon On Left Text", tint = Color.LightGray)
+        Icon(
+            imageVector = Icons.Default.List,
+            contentDescription = "Icon On Left Text",
+            tint = Color.LightGray
+        )
         Text(text = text, Modifier.padding(start = 16.dp), fontWeight = FontWeight.Normal)
     }
 }
 
+@Composable
+fun ImageItem(image: Uri, selectedImage: Uri?, context: Context, onImageSelected: (Uri) -> Unit) {
+    val isSelected = selectedImage == image
+    Card(
+        modifier = Modifier
+            .padding(4.dp)
+            .size(width = 120.dp, height = 180.dp)
+            .clickable { onImageSelected(image) },
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                bitmap = getBitmapFromUri(image, context),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize()
+            )
+            if (isSelected) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "contentDescription",
+                        tint = Color.White,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
 @Composable
 fun ColorItem(color: Color, selectedColor: Color, onColorSelected: (Color) -> Unit) {
     val isSelected = selectedColor == color
@@ -126,23 +201,71 @@ fun ColorItem(color: Color, selectedColor: Color, onColorSelected: (Color) -> Un
             containerColor = color
         ),
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
             if (isSelected) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = "Selected",
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .padding(8.dp)
-                        .align(Alignment.Center)
-                        .background(Color.Black),
-                    tint = Color.White,
-                )
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "contentDescription",
+                        tint = Color.White,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
             }
         }
     }
 }
 
 fun Color.toHex(): String = "#${this.value.toULong().toString(16).substring(2).uppercase()}"
+
+fun saveImageUris(context: Context, imageUris: List<Uri>) {
+    val sharedPreferences = context.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+    val editor = sharedPreferences.edit()
+    val gson = Gson()
+    val stringUris = imageUris.map { it.toString() }
+    val json = gson.toJson(stringUris)
+    editor.putString("imageUris", json)
+    editor.apply()
+}
+
+fun loadImageUris(context: Context): List<Uri> {
+    val sharedPreferences = context.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+    val gson = Gson()
+    val json = sharedPreferences.getString("imageUris", null)
+    val type = object : TypeToken<List<String>>() {}.type
+    val stringUris: List<String> = gson.fromJson(json, type) ?: emptyList()
+    return stringUris.map { Uri.parse(it) }
+}
+
+fun saveImageUri(context: Context, imageUri: Uri) {
+    val sharedPreferences = context.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+    val editor = sharedPreferences.edit()
+    val gson = Gson()
+    val stringUri = imageUri.toString()
+    editor.putString("imageUri", stringUri)
+    editor.apply()
+}
+
+fun loadImageUri(context: Context): Uri? {
+    val sharedPreferences = context.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+    val stringUri = sharedPreferences.getString("imageUri", null)
+    return stringUri?.let { Uri.parse(it) }
+}
+
+private fun getBitmapFromUri(uri: Uri, context: Context): ImageBitmap {
+    val parcelFileDescriptor = context.contentResolver.openFileDescriptor(uri, "r")
+    val fileDescriptor = parcelFileDescriptor?.fileDescriptor
+    val image = BitmapFactory.decodeFileDescriptor(fileDescriptor)
+    parcelFileDescriptor?.close()
+    return image.asImageBitmap()
+}
 
 @Preview(showBackground = true)
 @Composable
