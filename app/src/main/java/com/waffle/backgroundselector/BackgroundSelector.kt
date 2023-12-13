@@ -4,8 +4,10 @@ package com.waffle.backgroundselector
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -13,16 +15,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -42,45 +40,84 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.yalantis.ucrop.UCrop
+import java.io.File
+import java.security.Permissions
 
 @Composable
-fun BackgroundSelector(onBackClicked: () -> Unit, onSearchClicked: () -> Unit) {
-    val colors = listOf(
-        Color.Red, Color.Green, Color.Blue, Color.Yellow,
-        Color.Magenta, Color.Cyan, Color.Gray, Color.LightGray, Color.Black
-    )
+fun BackgroundSelector(onBackClicked: () -> Unit, onSearchClicked: () -> Unit, imageList: List<Uri>,
+                       refreshGallery: () -> List<Uri>) {
+
     val context = LocalContext.current
     var selectedColor by remember { mutableStateOf<Uri?>(null) }
     selectedColor = loadImageUri(context)
     val imageUris = remember { mutableStateListOf<Uri>() }
     imageUris.addAll(loadImageUris(context))
+
+    val cropActivityResultLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val resultUri = result.data?.let { UCrop.getOutput(it) }
+            resultUri?.let { imageUris.add(it) }
+            saveImageUris(context, imageUris)
+        }
+    }
     val launcher =
         rememberLauncherForActivityResult(contract = ActivityResultContracts.OpenDocument()) { uri: Uri? ->
             uri?.let {
                 val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                context.contentResolver.takePersistableUriPermission(it, takeFlags)
-                imageUris.add(it)
-                saveImageUris(context, imageUris)
+                it.let { context.contentResolver.takePersistableUriPermission(it, takeFlags) }
+                val destinationUri = Uri.fromFile(File(context.cacheDir, "Image_${System.currentTimeMillis()}"))
+                val options = UCrop.Options().apply {
+                    setCompressionQuality(80)
+                }
+                val ratio = getScreenDimensions(context)
+                val uCropIntent = UCrop.of(it, destinationUri)
+                    .withAspectRatio(ratio.first, ratio.second)
+                    .withOptions(options)
+                    .getIntent(context)
+                cropActivityResultLauncher.launch(uCropIntent)
             }
         }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            launcher.launch(arrayOf("image/*"))
+
+        } else {
+            Log.d("ExampleScreen","PERMISSION DENIED")
+        }
+    }
+
+    var images by remember { mutableStateOf(imageList) }
+
+    LaunchedEffect(Unit) {
+        images = refreshGallery()
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -111,13 +148,16 @@ fun BackgroundSelector(onBackClicked: () -> Unit, onSearchClicked: () -> Unit) {
             )
         }
     ) { PaddingValues ->
-        Box() {
+        Box(modifier = Modifier.fillMaxSize()) {
             selectedColor?.let { getBitmapFromUri(it, context) }
-                ?.let { Image(bitmap = it, contentDescription = null, modifier = Modifier.fillMaxSize()) }
+                ?.let { Image(bitmap = it, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
             Column(
                 modifier = Modifier.padding(paddingValues = PaddingValues)
             ) {
-                TextMenu(text = "Select from Gallery", onClickMenu = { launcher.launch(arrayOf("image/*")) })
+
+                TextMenu(text = "Select from Gallery", onClickMenu = {
+                    permissionLauncher.launch(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                })
                 TextMenu(text = "Set a Color", onClickMenu = { launcher.launch(arrayOf("image/*")) })
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -142,13 +182,15 @@ fun BackgroundSelector(onBackClicked: () -> Unit, onSearchClicked: () -> Unit) {
 fun TextMenu(text: String, onClickMenu: () -> Unit) {
     Row(
         modifier = Modifier
-            .padding(start = 16.dp, end = 16.dp, top = 16.dp)
+            .fillMaxWidth()
+            .background(Color.White)
+            .padding(16.dp)
             .clickable(onClick = { onClickMenu() })
     ) {
         Icon(
             imageVector = Icons.Default.List,
             contentDescription = "Icon On Left Text",
-            tint = Color.LightGray
+            tint = Color.Black
         )
         Text(text = text, Modifier.padding(start = 16.dp), fontWeight = FontWeight.Normal)
     }
@@ -160,7 +202,7 @@ fun ImageItem(image: Uri, selectedImage: Uri?, context: Context, onImageSelected
     Card(
         modifier = Modifier
             .padding(4.dp)
-            .size(width = 120.dp, height = 180.dp)
+            .size(140.dp, 180.dp)
             .clickable { onImageSelected(image) },
     ) {
         Box(
@@ -170,7 +212,8 @@ fun ImageItem(image: Uri, selectedImage: Uri?, context: Context, onImageSelected
             Image(
                 bitmap = getBitmapFromUri(image, context),
                 contentDescription = null,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
             )
             if (isSelected) {
                 Box(
@@ -265,13 +308,4 @@ private fun getBitmapFromUri(uri: Uri, context: Context): ImageBitmap {
     val image = BitmapFactory.decodeFileDescriptor(fileDescriptor)
     parcelFileDescriptor?.close()
     return image.asImageBitmap()
-}
-
-@Preview(showBackground = true)
-@Composable
-fun DefaultPreview() {
-    BackgroundSelector(
-        onBackClicked = { /* Handle back press */ },
-        onSearchClicked = { /* Handle search action */ }
-    )
 }

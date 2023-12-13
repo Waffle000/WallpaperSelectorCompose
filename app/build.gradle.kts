@@ -67,10 +67,14 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    implementation ("androidx.compose.ui:ui-tooling:1.0.0")
 
     // gson
     implementation ("com.google.code.gson:gson:2.10.1")
 
     // coil
     implementation("io.coil-kt:coil-compose:2.5.0")
+
+    // ucrop
+    implementation ("com.github.yalantis:ucrop:2.2.8")
 }
